@@ -151,7 +151,7 @@ void
 client_set_ec_server_pubkey(const uint8_t *const pubkey) {
 	memcpy(ec_server_pubkey, pubkey, sizeof(ec_server_pubkey));
 	/* ensure we do not send unencrypted packets: */
-	ec_keys.ec_state = EC_CLIENT_HELLO;
+	ec_keys.ec_state = EC_WAIT;
 }
 
 void
@@ -652,25 +652,13 @@ read_dns_withq(int dns_fd, int tun_fd, char *buf, int buflen, struct query *q)
 		r -= RAW_HDR_LEN;
 		datalen = sizeof(buf);
 
-#ifdef HAVE_MONOCYPHER
-		switch (ec_keys.ec_state) {
-		case EC_NONE: break; /* encryption not used */
-		case EC_CLIENT_HELLO: /* don't have keys yet */
-			fprintf(stderr, "EC unable to decrypt, missing server handshake\n");
-			break;
-		case EC_ESTABLISHED:
-		{
-			size_t pktlen = r;
-			fprintf(stdout, "EC about to decrypt %d %zd\n", r, pktlen);
-			if(ec_decrypt( (uint8_t*) &data[RAW_HDR_LEN], &pktlen, ec_keys.ec_server_send_key)) {
-				fprintf(stderr, "EC decrypt failed %d\n", r);
-				return 0;
-			}
-			r = pktlen;
-			break;
+		/* TODO figure out how to deal with pktlen|r size_t stuff */
+		size_t pktlen = r;
+		if(ec_decrypt( (uint8_t*) &data[RAW_HDR_LEN], &pktlen, &ec_keys)) {
+			fprintf(stderr, "EC decrypt failed %d\n", r);
+			return 0;
 		}
-		}
-#endif /* HAVE_MONOCYPHER */
+		r = pktlen;
 
 		if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) &data[RAW_HDR_LEN], r) == Z_OK) {
 			write_tun(tun_fd, buf, datalen);
@@ -785,24 +773,11 @@ tunnel_tun(int tun_fd, int dns_fd)
 	inlen = read;
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, inlen, 9);
 
-#ifdef HAVE_MONOCYPHER
-	switch(ec_keys.ec_state) {
-	case EC_NONE: break; /* encryptio not used, no -a */
-	case EC_CLIENT_HELLO: /* need to use encryption but don't have keys: */
-		fprintf(stderr, "EC: unable to send packet, missing server handshake\n");
+	if (ec_encrypt((uint8_t *)out, &outlen, &ec_keys)) {
+		fprintf(stdout, "ec_encrypt failed\n");
 		return -1;
-		break;
-	case EC_ESTABLISHED:
-		fprintf(stdout, "EC about to encrypt\n");
-		if(ec_encrypt((uint8_t *)out, &outlen, ec_keys.ec_client_send_key)) {
-			fprintf(stderr, "EC encryption failed\n");
-			return -1;
-		}
-		fprintf(stdout, "EC encrypted %zd\n", outlen);
-		break;
 	}
-
-#endif /* HAVE_MONOCYPHER */
+	fprintf(stdout, "EC encrypted %zd\n", outlen);
 
 	memcpy(outpkt.data, out, MIN(outlen, sizeof(outpkt.data)));
 	outpkt.sentlen = 0;

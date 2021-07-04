@@ -103,7 +103,7 @@ ec_client_start_session(ec_session_t *session,
 		return 1;
 	}
 	crypto_x25519_public_key(msg->client_pub, session->own_secret);
-	ec_keys->ec_state = EC_CLIENT_HELLO;
+	ec_keys->ec_state = EC_WAIT;
 	return 0;
 #endif /* HAVE_MONOCYPHER */
 }
@@ -127,7 +127,7 @@ ec_client_parse_response(ec_session_t *session,
 
 	crypto_key_exchange(session->shared_secret, session->own_secret,
 	    expected.server_pub);
-	if (ec_derive_keys(ec_keys, session->shared_secret, expected.server_pub)) {
+	if (ec_derive_keys(ec_keys, session->shared_secret, expected.server_pub, 0)) {
 		return 3;
 	}
 	return 0;
@@ -159,7 +159,7 @@ ec_server_start_session(char *const unpacked,
 	crypto_key_exchange(ec_session->shared_secret,
 	    own_secret,
 	    e_response_signed.client_hello.client_pub);
-	if (ec_derive_keys(ec_keys, ec_session->shared_secret, e_response_signed.server_pub)){
+	if (ec_derive_keys(ec_keys, ec_session->shared_secret, e_response_signed.server_pub, 1)){
 		return 1;
 	}
 	crypto_sign(e_response->signature,
@@ -172,17 +172,34 @@ ec_server_start_session(char *const unpacked,
 
 int
 ec_encrypt(uint8_t *plain, size_t *plain_len,
-    const uint8_t (*const key))
+    const ec_keys_t *const ec_keys)
 {
+	switch (ec_keys->ec_state) {
+	case EC_NONE:
+		return 0; /* encryption not required */
+		break;
+	case EC_WAIT:
+		fprintf(stderr, "EC: unable to send packet, missing server handshake\n");
+		return -1; /* encryption required, but have no keys yet */
+		break;
+	case EC_CLIENT:
+	case EC_SERVER:
+	{
 #ifndef HAVE_MONOCYPHER
-	return -1;
+		return -1; /* encryption not supported without libmonocypher */
+		break;
 #else
+		fprintf(stdout, "EC about to encrypt\n");
 	uint8_t nonce[24] = {0};
 	if (*plain_len >= 64*1024-16) {
-		return -1;
+		fprintf(stderr, "EC encryption failed, pkt too big\n");
+		return -1; /* too big to fit 16 byte MAC tag at the end */
 	}
+	const uint8_t *const key = (EC_CLIENT == ec_keys->ec_state)
+	    ? ec_keys->ec_client_send_key
+	    : ec_keys->ec_server_send_key;
 	crypto_lock(plain+*plain_len, /* mac */
-	    plain, (uint8_t *)key,
+	    plain, key,
 	    nonce, plain, *plain_len);
 	fprintf(stdout, "ec_encrypt plain_len %zd key:%x mac:%x\n",
 	    *plain_len, *key, *(plain+*plain_len));
@@ -190,39 +207,58 @@ ec_encrypt(uint8_t *plain, size_t *plain_len,
 	debug_hex("ec_e", plain, *plain_len);
 	return 0;
 #endif /* HAVE_MONOCYPHER */
+	} /* case EC_CLIENT|case EC_SERVER */
+	default: return -1; /* can't happen but GCC complains */
+	} /* switch */
 }
 
 int
 ec_decrypt(uint8_t *plain, size_t *plain_len,
-    const uint8_t *const key)
+    const ec_keys_t *const ec_keys)
 {
+	switch (ec_keys->ec_state) {
+	case EC_NONE:
+		return 0;
+		break;
+	case EC_WAIT:
+		return -1;
+	case EC_CLIENT:
+	case EC_SERVER:
+	{
 #ifndef HAVE_MONOCYPHER
-	return -1;
+		return -1; /* required but not supported */
 #else
-	uint8_t nonce[24] = {0};
-	uint8_t mac[16] = {0};
-	debug_hex("ec_d", plain, *plain_len);
-	*plain_len = *plain_len - 16;
-	if (*plain_len >= 64*1024-sizeof(mac)) {
-		fprintf(stdout, "ec_decrypt wrong plain_len %zd / %zd\n",
-		    *plain_len, *plain_len+16);
-		return -1;
-	}
-	fprintf(stdout, "ec_decrypt plain_len %zd key:%x mac:%x\n",
-	    *plain_len, *key, *(plain+*plain_len));
-	if (crypto_unlock(plain, (uint8_t *)key,
-		nonce,
-		plain+*plain_len, /* mac */
-		plain, *plain_len)) {
-		return -1;
-	}
-	return 0;
+		uint8_t nonce[24] = {0};
+		uint8_t mac[16] = {0};
+		debug_hex("ec_d", plain, *plain_len);
+		*plain_len = *plain_len - 16;
+		if (*plain_len >= 64*1024-sizeof(mac)) {
+			fprintf(stdout, "ec_decrypt wrong plain_len %zd / %zd\n",
+			    *plain_len, *plain_len+16);
+			return -1;
+		}
+		const uint8_t *const key = (EC_CLIENT == ec_keys->ec_state)
+		    ? ec_keys->ec_server_send_key
+		    : ec_keys->ec_client_send_key;
+		fprintf(stdout, "ec_decrypt plain_len %zd key:%x mac:%x\n",
+		    *plain_len, *key, *(plain+*plain_len));
+		if (crypto_unlock(plain, (uint8_t *)key,
+			nonce,
+			plain+*plain_len, /* mac */
+			plain, *plain_len)) {
+			return -1;
+		}
+		return 0;
 #endif /* HAVE_MONOCYPHER */
+	} /* case EC_CLIENT| case EC_SERVER: */
+	default:
+		return -1; /* should not happen */
+	} /* switch*/
 }
 
 int
 ec_derive_keys(ec_keys_t *ec_keys, const uint8_t *const shared_secret,
-    const uint8_t *const server_pub)
+    const uint8_t *const server_pub, int is_server)
 {
 	/* Hash in the server's public signing key.
 	   This is not sent over the wire, so this acts as a basic preventative
@@ -244,6 +280,7 @@ ec_derive_keys(ec_keys_t *ec_keys, const uint8_t *const shared_secret,
 	    (uint8_t *)"client", 6);
 	debug_hex("clientkey", ec_keys->ec_client_send_key, sizeof(ec_keys->ec_client_send_key));
 	crypto_wipe(tmp_shared_secret, sizeof(tmp_shared_secret));
-	ec_keys->ec_state = EC_ESTABLISHED;
+	ec_keys->ec_state = (is_server ? EC_SERVER : EC_CLIENT);
+
 	return 0;
 }

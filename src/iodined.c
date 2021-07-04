@@ -668,17 +668,10 @@ static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 	outlen = sizeof(out);
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, read, 9);
 
-#ifdef HAVE_MONOCYPHER
-	if (users[userid].ec_session.ec_state) {
-		fprintf(stdout, "EC about to encrypt %zd\n", outlen);
-		if(ec_encrypt((uint8_t *)out, &outlen,
-			users[userid].ec_session.ec_server_send_key)) {
-			fprintf(stderr, "EC encryption failed\n");
-			return -1;
-		}
-		fprintf(stdout, "EC encrypted %zd\n", outlen);
+	if (ec_encrypt((uint8_t *)out, &outlen, &users[userid].ec_session)) {
+		fprintf(stderr, "EC encryption failed\n");
+		return -1;
 	}
-#endif /* HAVE_MONOCYPHER */
 
 	if (users[userid].conn == CONN_DNS_NULL) {
 #ifdef OUTPACKETQ_LEN
@@ -1911,21 +1904,16 @@ handle_full_packet(int tun_fd, struct dnsfd *dns_fds, int userid)
 	int ret;
 
 	outlen = sizeof(out);
-	size_t pktlen = users[userid].inpacket.len;
 
-#ifdef HAVE_MONOCYPHER
-	if (users[userid].ec_session.ec_state) {
-		fprintf(stdout, "EC about to decrypt %zd\n", pktlen);
-		if(ec_decrypt((uint8_t*)users[userid].inpacket.data,
-			&pktlen,
-			users[userid].ec_session.ec_client_send_key)) {
-			fprintf(stderr, "EC decrypt failed\n");
-			return;
-		}
-		fprintf(stdout, "EC decrypted %d %zd\n", users[userid].inpacket.len, pktlen);
-		users[userid].inpacket.len = pktlen; // TODO assert pktlen = len-16
+	/* TODO see if we can do something smart about typeof(len)/size_t
+	 * and avoid the intermediary: */
+	size_t pktlen = users[userid].inpacket.len;
+	if(ec_decrypt((uint8_t*)users[userid].inpacket.data,
+		&pktlen, &users[userid].ec_session)) {
+		fprintf(stderr, "EC decrypt failed\n");
+		return;
 	}
-#endif
+	users[userid].inpacket.len = pktlen; // TODO assert pktlen = len-16
 
 	ret = uncompress((uint8_t*)out, &outlen,
 		   (uint8_t*)users[userid].inpacket.data, users[userid].inpacket.len);

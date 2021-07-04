@@ -12,9 +12,10 @@ typedef struct {
 } ec_server_config_t;
 
 typedef enum {
-	EC_NONE         = 0,
-	EC_CLIENT_HELLO = 1,
-	EC_ESTABLISHED  = 2,
+	EC_NONE      = 1,
+	EC_WAIT      = 2,
+	EC_SERVER    = 4,
+	EC_CLIENT    = 8,
 } ec_session_state_t;
 
 typedef struct {
@@ -56,14 +57,14 @@ int
 ec_arg_decode_pubkey(uint8_t *_outbuf, const char * const _inbuf);
 
 int
-ec_encrypt(uint8_t *_plain, size_t *_plain_len, const uint8_t *const _key);
+ec_encrypt(uint8_t *_plain, size_t *_plain_len, const ec_keys_t *const _keys);
 
 int
-ec_decrypt(uint8_t *_plain, size_t *_plain_len, const uint8_t (*const _key));
+ec_decrypt(uint8_t *_plain, size_t *_plain_len, const ec_keys_t (*const _keys));
 
 int
 ec_derive_keys(ec_keys_t *_ec_keys, const uint8_t *const _shared_secret,
-    const uint8_t *const _server_public_key);
+    const uint8_t *const _server_public_key, int is_server);
 
 /* Client functions */
 
