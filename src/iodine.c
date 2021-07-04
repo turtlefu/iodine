@@ -41,6 +41,7 @@
 #include "tun.h"
 #include "client.h"
 #include "util.h"
+#include "ecdh.h"
 
 #ifdef WINDOWS32
 WORD req_version = MAKEWORD(2, 2);
@@ -176,6 +177,7 @@ int main(int argc, char **argv)
 	selecttimeout = 4;
 	hostname_maxlen = 0xFF;
 	nameserv_family = AF_UNSPEC;
+	uint8_t ec_server_pubkey[32] = {0};
 
 #ifdef WINDOWS32
 	WSAStartup(req_version, &wsa_data);
@@ -192,7 +194,7 @@ int main(int argc, char **argv)
 		__progname++;
 #endif
 
-	while ((choice = getopt(argc, argv, "46vfhru:t:d:R:P:m:M:F:T:O:L:I:")) != -1) {
+	while ((choice = getopt(argc, argv, "46vfhru:a:t:d:R:P:m:M:F:T:O:L:I:")) != -1) {
 		switch(choice) {
 		case '4':
 			nameserv_family = AF_INET;
@@ -216,6 +218,12 @@ int main(int argc, char **argv)
 			break;
 		case 'u':
 			username = optarg;
+			break;
+		case 'a':
+			if (ec_arg_decode_pubkey(ec_server_pubkey, optarg)) {
+				return 1;
+			}
+			client_set_ec_server_pubkey(ec_server_pubkey);
 			break;
 		case 't':
 			newroot = optarg;

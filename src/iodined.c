@@ -51,6 +51,7 @@
 
 #include "dns.h"
 #include "encoding.h"
+#include "ecdh.h"
 #include "user.h"
 #include "login.h"
 #include "tun.h"
@@ -65,6 +66,11 @@
 WORD req_version = MAKEWORD(2, 2);
 WSADATA wsa_data;
 #endif
+
+#ifdef HAVE_MONOCYPHER
+static ec_server_config_t ec_server_config = { 0 };
+#define EDDSA_ENV_VAR "IODINED_EDDSA_KEY"
+#endif /* HAVE_MONOCYPHER */
 
 #define PASSWORD_ENV_VAR "IODINED_PASS"
 
@@ -662,6 +668,18 @@ static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 	outlen = sizeof(out);
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, read, 9);
 
+#ifdef HAVE_MONOCYPHER
+	if (users[userid].ec_session.ec_state) {
+		fprintf(stdout, "EC about to encrypt %zd\n", outlen);
+		if(ec_encrypt((uint8_t *)out, &outlen,
+			users[userid].ec_session.ec_server_send_key)) {
+			fprintf(stderr, "EC encryption failed\n");
+			return -1;
+		}
+		fprintf(stdout, "EC encrypted %zd\n", outlen);
+	}
+#endif /* HAVE_MONOCYPHER */
+
 	if (users[userid].conn == CONN_DNS_NULL) {
 #ifdef OUTPACKETQ_LEN
 		/* If a packet is being sent, try storing the new one in the queue.
@@ -858,6 +876,30 @@ handle_null_request(int tun_fd, int dns_fd, struct dnsfd *dns_fds, struct query 
 			syslog(LOG_INFO, "dropped user from %s, sent bad version %08X",
 				format_addr(&q->from, q->fromlen), version);
 		}
+		return;
+	} else if (in[0] == 'E' || in[0] == 'e') {
+		/* establish new ECDH session */
+		read = unpack_data(unpacked, sizeof(unpacked), &(in[1]), domain_len -1, &base32_ops);
+		if (read != sizeof(ec_msg_client_hello_t)) {
+			write_dns(dns_fd, q, "BADLEN", 6, 'T');
+			return;
+		}
+		if ((uint8_t) unpacked[0] >= USERS) {
+			/* prevent overflow */
+			write_dns(dns_fd, q, "BADUSER", 7, 'T');
+			return;
+		}
+		userid = ((uint8_t) unpacked[0]);
+		e_response_msg_t e_response = { 0 };
+		ec_session_t ec_session = {0};
+		if(ec_server_start_session(
+			    unpacked, ec_server_config, &e_response,
+				&ec_session, &users[userid].ec_session)) {
+			write_dns(dns_fd, q, "BADEC", 5, 'T');
+			return;
+
+		}
+		write_dns(dns_fd, q, (const char *) &e_response, sizeof(e_response), 'T');
 		return;
 	} else if (in[0] == 'L' || in[0] == 'l') {
 		read = unpack_data(unpacked, sizeof(unpacked), &(in[1]), domain_len - 1, &base32_ops);
@@ -1869,6 +1911,22 @@ handle_full_packet(int tun_fd, struct dnsfd *dns_fds, int userid)
 	int ret;
 
 	outlen = sizeof(out);
+	size_t pktlen = users[userid].inpacket.len;
+
+#ifdef HAVE_MONOCYPHER
+	if (users[userid].ec_session.ec_state) {
+		fprintf(stdout, "EC about to decrypt %zd\n", pktlen);
+		if(ec_decrypt((uint8_t*)users[userid].inpacket.data,
+			&pktlen,
+			users[userid].ec_session.ec_client_send_key)) {
+			fprintf(stderr, "EC decrypt failed\n");
+			return;
+		}
+		fprintf(stdout, "EC decrypted %d %zd\n", users[userid].inpacket.len, pktlen);
+		users[userid].inpacket.len = pktlen; // TODO assert pktlen = len-16
+	}
+#endif
+
 	ret = uncompress((uint8_t*)out, &outlen,
 		   (uint8_t*)users[userid].inpacket.data, users[userid].inpacket.len);
 
@@ -2322,6 +2380,7 @@ static void help(FILE *stream)
 		"  -n ip to respond with to NS queries\n"
 		"     (Use 'auto' to use the external IP, looked up via a service)\n"
 		"  -b port to forward normal DNS queries to (on localhost)\n"
+		"  -e private key for elliptic curve auth, base64 of 32 random bytes\n"
 		"  -P password used for authentication (max 32 chars will be used)\n"
 		"  -F pidfile to write pid to a file\n"
 		"  -i maximum idle time before shutting down\n\n"
@@ -2440,7 +2499,7 @@ main(int argc, char **argv)
 	srand(time(NULL));
 	fw_query_init();
 
-	while ((choice = getopt(argc, argv, "46vcsfhDu:t:d:m:l:L:p:n:b:P:z:F:i:")) != -1) {
+	while ((choice = getopt(argc, argv, "46vcsfhDu:t:d:m:l:L:p:n:b:e:P:z:F:i:")) != -1) {
 		switch(choice) {
 		case '4':
 			addrfamily = AF_INET;
@@ -2503,6 +2562,11 @@ main(int argc, char **argv)
 			break;
 		case 'i':
 			max_idle_time = atoi(optarg);
+			break;
+		case 'e':
+			if (ec_server_parse_arg(optarg, &ec_server_config)) {
+				return 1;
+			}
 			break;
 		case 'P':
 			strncpy(password, optarg, sizeof(password));

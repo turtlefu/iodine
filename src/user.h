@@ -18,6 +18,8 @@
 #ifndef __USER_H__
 #define __USER_H__
 
+#include "ecdh.h"
+
 #define USERS 16
 
 #define OUTPACKETQ_LEN 4		/* Note: 16 users * 1 packet = 1MB */
@@ -53,28 +55,31 @@ struct tun_user {
 	struct packet outpacket;
 	int outfragresent;
 	const struct encoder *encoder;
-	char downenc;
 	int out_acked_seqno;
 	int out_acked_fragment;
 	int fragsize;
 	enum connection conn;
 	int lazy;
+	int qmemping_lastfilled;
+	char downenc;
 	unsigned char qmemping_cmc[QMEMPING_LEN * 4];
 	unsigned short qmemping_type[QMEMPING_LEN];
-	int qmemping_lastfilled;
 	unsigned char qmemdata_cmc[QMEMDATA_LEN * 4];
 	unsigned short qmemdata_type[QMEMDATA_LEN];
 	int qmemdata_lastfilled;
+#ifdef HAVE_MONOCYPHER
+	ec_keys_t ec_session; // encryption keys/status
+#endif /* HAVE_MONOCYPHER */
 #ifdef OUTPACKETQ_LEN
 	struct packet outpacketq[OUTPACKETQ_LEN];
 	int outpacketq_nexttouse;
 	int outpacketq_filled;
 #endif
 #ifdef DNSCACHE_LEN
-	struct query dnscache_q[DNSCACHE_LEN];
 	char dnscache_answer[DNSCACHE_LEN][4096];
 	int dnscache_answerlen[DNSCACHE_LEN];
 	int dnscache_lastfilled;
+	struct query dnscache_q[DNSCACHE_LEN];
 #endif
 };
 

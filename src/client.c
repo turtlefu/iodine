@@ -47,6 +47,7 @@
 
 #include "common.h"
 #include "encoding.h"
+#include "ecdh.h"
 #include "dns.h"
 #include "login.h"
 #include "tun.h"
@@ -57,6 +58,10 @@ static void handshake_lazyoff(int dns_fd);
 
 static int running;
 static const char *password;
+
+static uint8_t ec_server_pubkey[32];
+static ec_session_t ec_session = {0};
+static ec_keys_t ec_keys = {0};
 
 static struct sockaddr_storage nameserv;
 static int nameserv_len;
@@ -140,6 +145,13 @@ client_set_nameserver(struct sockaddr_storage *addr, int addrlen)
 {
 	memcpy(&nameserv, addr, addrlen);
 	nameserv_len = addrlen;
+}
+
+void
+client_set_ec_server_pubkey(const uint8_t *const pubkey) {
+	memcpy(ec_server_pubkey, pubkey, sizeof(ec_server_pubkey));
+	/* ensure we do not send unencrypted packets: */
+	ec_keys.ec_state = EC_CLIENT_HELLO;
 }
 
 void
@@ -324,7 +336,7 @@ send_packet(int fd, char cmd, const char *data, const size_t datalen)
 	char buf[4096];
 
 	buf[0] = cmd;
-
+	debug_hex("send_packet", data, datalen);
 	build_hostname(buf + 1, sizeof(buf) - 1, data, datalen, topdomain,
 		       &base32_ops, hostname_maxlen);
 	send_query(fd, buf);
@@ -639,6 +651,27 @@ read_dns_withq(int dns_fd, int tun_fd, char *buf, int buflen, struct query *q)
 
 		r -= RAW_HDR_LEN;
 		datalen = sizeof(buf);
+
+#ifdef HAVE_MONOCYPHER
+		switch (ec_keys.ec_state) {
+		case EC_NONE: break; /* encryption not used */
+		case EC_CLIENT_HELLO: /* don't have keys yet */
+			fprintf(stderr, "EC unable to decrypt, missing server handshake\n");
+			break;
+		case EC_ESTABLISHED:
+		{
+			size_t pktlen = r;
+			fprintf(stdout, "EC about to decrypt %d %zd\n", r, pktlen);
+			if(ec_decrypt( (uint8_t*) &data[RAW_HDR_LEN], &pktlen, ec_keys.ec_server_send_key)) {
+				fprintf(stderr, "EC decrypt failed %d\n", r);
+				return 0;
+			}
+			r = pktlen;
+			break;
+		}
+		}
+#endif /* HAVE_MONOCYPHER */
+
 		if (uncompress((uint8_t*)buf, &datalen, (uint8_t*) &data[RAW_HDR_LEN], r) == Z_OK) {
 			write_tun(tun_fd, buf, datalen);
 		}
@@ -751,6 +784,25 @@ tunnel_tun(int tun_fd, int dns_fd)
 	outlen = sizeof(out);
 	inlen = read;
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, inlen, 9);
+
+#ifdef HAVE_MONOCYPHER
+	switch(ec_keys.ec_state) {
+	case EC_NONE: break; /* encryptio not used, no -a */
+	case EC_CLIENT_HELLO: /* need to use encryption but don't have keys: */
+		fprintf(stderr, "EC: unable to send packet, missing server handshake\n");
+		return -1;
+		break;
+	case EC_ESTABLISHED:
+		fprintf(stdout, "EC about to encrypt\n");
+		if(ec_encrypt((uint8_t *)out, &outlen, ec_keys.ec_client_send_key)) {
+			fprintf(stderr, "EC encryption failed\n");
+			return -1;
+		}
+		fprintf(stdout, "EC encrypted %zd\n", outlen);
+		break;
+	}
+
+#endif /* HAVE_MONOCYPHER */
 
 	memcpy(outpkt.data, out, MIN(outlen, sizeof(outpkt.data)));
 	outpkt.sentlen = 0;
@@ -1175,6 +1227,41 @@ client_tunnel(int tun_fd, int dns_fd)
 	return rv;
 }
 
+static int
+send_ec_client_hello(int fd)
+{
+	fprintf(stderr, "EC userid %d\n", userid);
+	ec_msg_client_hello_t client_hello = {0};
+	client_hello.userid = userid;
+	if (ec_client_start_session(&ec_session, &client_hello, &ec_keys)) {
+		fprintf(stderr, "EC client_start_session\n");
+		return 1;
+	}
+	send_packet(fd, 'e', (const char *)&client_hello, sizeof(client_hello));
+	int timeout = 10;
+
+	e_response_signed_t expected = {0};
+	memcpy(&expected.client_hello,
+	    (const void *)&client_hello, sizeof(expected.client_hello));
+
+	e_response_msg_t resp;
+	int rc = handshake_waitdns(fd, (char *)&resp, sizeof(resp),
+	    'e', 'E', timeout);
+	if (rc <= 0) {
+		fprintf(stderr, "EC handshake waitdns\n");
+		return 1;
+	}
+	memcpy(expected.server_pub, resp.server_pub,
+	    sizeof(expected.server_pub));
+	if (ec_client_parse_response(&ec_session, &resp,
+		&client_hello, ec_server_pubkey, &ec_keys)) {
+		fprintf(stderr, "EC BAD SIG\n");
+		return 2;
+	}
+	fprintf(stderr, "EC WORKS\n");
+	return 0;
+}
+
 static void
 send_login(int fd, char *login, int len)
 {
@@ -1387,6 +1474,10 @@ handshake_login(int dns_fd, int seed)
 	login_calculate(login, 16, password, seed);
 
 	for (i = 0; running && i < 5; i++) {
+
+		if (EC_NONE != ec_keys.ec_state) {
+			send_ec_client_hello(dns_fd);
+		}
 
 		send_login(dns_fd, login, 16);
 
