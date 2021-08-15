@@ -1451,7 +1451,10 @@ handshake_login(int dns_fd, int seed)
 	for (i = 0; running && i < 5; i++) {
 
 		if (EC_NONE != ec_keys.ec_state) {
-			send_ec_client_hello(dns_fd);
+			if (send_ec_client_hello(dns_fd)) {
+				fprintf(stderr, "handshake_login failed, ec\n");
+				return 1;
+			}
 		}
 
 		send_login(dns_fd, login, 16);
