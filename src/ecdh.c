@@ -261,6 +261,9 @@ int
 ec_derive_keys(ec_keys_t *ec_keys, const uint8_t *const shared_secret,
     const uint8_t *const server_pub, int is_server)
 {
+#ifndef HAVE_MONOCYPHER
+		return 1; /* required but not supported */
+#else
 	/* Hash in the server's public signing key.
 	   This is not sent over the wire, so this acts as a basic preventative
 	   measure to prevent clients that do not know the public key from
@@ -284,4 +287,5 @@ ec_derive_keys(ec_keys_t *ec_keys, const uint8_t *const shared_secret,
 	ec_keys->ec_state = (is_server ? EC_SERVER : EC_CLIENT);
 
 	return 0;
+#endif /* HAVE_MONOCYPHER */
 }
