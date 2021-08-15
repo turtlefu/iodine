@@ -67,10 +67,8 @@ WORD req_version = MAKEWORD(2, 2);
 WSADATA wsa_data;
 #endif
 
-#ifdef HAVE_MONOCYPHER
 static ec_server_config_t ec_server_config = { 0 };
 #define EDDSA_ENV_VAR "IODINED_EDDSA_KEY"
-#endif /* HAVE_MONOCYPHER */
 
 #define PASSWORD_ENV_VAR "IODINED_PASS"
 
