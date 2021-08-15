@@ -62,7 +62,6 @@ static const char *password;
 static uint8_t ec_server_pubkey[32];
 static ec_session_t ec_session = {0};
 static ec_keys_t ec_keys = { 0 };
-ec_keys.ec_state = EC_NONE; /* default to unencrypted */
 
 static struct sockaddr_storage nameserv;
 static int nameserv_len;
@@ -127,6 +126,10 @@ client_init()
 	inpkt.len = 0;
 	inpkt.seqno = 0;
 	inpkt.fragment = 0;
+	if (0 == ec_keys.ec_state) {
+		/* default to unencrypted */
+		ec_keys.ec_state = EC_NONE;
+	}
 }
 
 void
