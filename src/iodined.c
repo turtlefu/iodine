@@ -668,9 +668,11 @@ static int tunnel_tun(int tun_fd, struct dnsfd *dns_fds)
 	outlen = sizeof(out);
 	compress2((uint8_t*)out, &outlen, (uint8_t*)in, read, 9);
 
-	if (ec_encrypt((uint8_t *)out, &outlen, &users[userid].ec_session)) {
-		fprintf(stderr, "EC encryption failed\n");
-		return -1;
+	if (ec_server_config.encryption_enabled) {
+		if (ec_encrypt((uint8_t *)out, &outlen, &users[userid].ec_session)) {
+			fprintf(stderr, "EC encryption failed\n");
+			return -1;
+		}
 	}
 
 	if (users[userid].conn == CONN_DNS_NULL) {
@@ -1908,10 +1910,12 @@ handle_full_packet(int tun_fd, struct dnsfd *dns_fds, int userid)
 	/* TODO see if we can do something smart about typeof(len)/size_t
 	 * and avoid the intermediary: */
 	size_t pktlen = users[userid].inpacket.len;
+	if (ec_server_config.encryption_enabled) {
 	if(ec_decrypt((uint8_t*)users[userid].inpacket.data,
 		&pktlen, &users[userid].ec_session)) {
 		fprintf(stderr, "EC decrypt failed\n");
 		return;
+	}
 	}
 	users[userid].inpacket.len = pktlen; // TODO assert pktlen = len-16
 
@@ -2553,6 +2557,7 @@ main(int argc, char **argv)
 			break;
 		case 'e':
 			if (ec_server_parse_arg(optarg, &ec_server_config)) {
+				fprintf(stderr, "bad -e argument\n");
 				return 1;
 			}
 			break;

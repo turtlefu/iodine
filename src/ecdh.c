@@ -42,6 +42,7 @@ ec_arg_decode_pubkey(uint8_t *outkey, const char * const inkey)
 int
 ec_server_parse_arg(char *optarg, ec_server_config_t *config)
 {
+	config->encryption_enabled = 666;
 #ifndef HAVE_MONOCYPHER
 	return 1;
 #else

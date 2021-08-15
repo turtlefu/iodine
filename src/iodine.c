@@ -84,6 +84,7 @@ static void help(FILE *stream, bool verbose)
 		"\nOptions to try if connection doesn't work:\n"
 		"  -4 to connect only to IPv4\n"
 		"  -6 to connect only to IPv6\n"
+	        "-a eddsa public key of server (base64)\n"
 		"  -T force dns type: NULL, PRIVATE, TXT, SRV, MX, CNAME, A (default: autodetect)\n"
 		"  -O force downstream encoding for -T other than NULL: Base32, Base64, Base64u,\n"
 		"     Base128, or (only for TXT:) Raw  (default: autodetect)\n"
@@ -221,6 +222,7 @@ int main(int argc, char **argv)
 			break;
 		case 'a':
 			if (ec_arg_decode_pubkey(ec_server_pubkey, optarg)) {
+				fprintf(stderr, "Unable to decode public key\n");
 				return 1;
 			}
 			client_set_ec_server_pubkey(ec_server_pubkey);

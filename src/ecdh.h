@@ -9,6 +9,7 @@
 typedef struct {
 	uint8_t eddsa_secret[32];
 	uint8_t eddsa_public[32];
+	int     encryption_enabled;
 } ec_server_config_t;
 
 typedef enum {
