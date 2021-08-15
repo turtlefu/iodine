@@ -67,9 +67,7 @@ struct tun_user {
 	unsigned char qmemdata_cmc[QMEMDATA_LEN * 4];
 	unsigned short qmemdata_type[QMEMDATA_LEN];
 	int qmemdata_lastfilled;
-#ifdef HAVE_MONOCYPHER
 	ec_keys_t ec_session; // encryption keys/status
-#endif /* HAVE_MONOCYPHER */
 #ifdef OUTPACKETQ_LEN
 	struct packet outpacketq[OUTPACKETQ_LEN];
 	int outpacketq_nexttouse;
